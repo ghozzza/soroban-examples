@@ -1,28 +1,24 @@
 #![cfg(test)]
 extern crate std;
 
-use crate::{contract::Token, TokenClient};
+use crate::{contract::{Token, TokenClient}};
 use soroban_sdk::{
+    log,
     symbol_short,
     testutils::{Address as _, AuthorizedFunction, AuthorizedInvocation},
-    Address, Env, FromVal, IntoVal, String, Symbol,
+    Address, Env, IntoVal, Symbol,
 };
 
 fn create_token<'a>(e: &Env, admin: &Address) -> TokenClient<'a> {
-    let token_contract = e.register(
-        Token,
-        (
-            admin,
-            7_u32,
-            String::from_val(e, &"name"),
-            String::from_val(e, &"symbol"),
-        ),
-    );
+    let token_contract = e.register(Token, (admin,));
     TokenClient::new(e, &token_contract)
 }
 
 #[test]
-fn test() {
+// RUN
+// cargo test test_all -- --exact --nocapture
+// cargo test test_all -- --nocapture
+fn test_all() {
     let e = Env::default();
     e.mock_all_auths();
 
@@ -32,7 +28,6 @@ fn test() {
     let user2 = Address::generate(&e);
     let user3 = Address::generate(&e);
     let token = create_token(&e, &admin1);
-
     token.mint(&user1, &1000);
     assert_eq!(
         e.auths(),
@@ -49,6 +44,7 @@ fn test() {
         )]
     );
     assert_eq!(token.balance(&user1), 1000);
+    log!(&e, "token.balance(&user1): {}", token.balance(&user1.clone()));
 
     token.approve(&user2, &user3, &500, &200);
     assert_eq!(
@@ -142,6 +138,8 @@ fn test() {
         )]
     );
     assert_eq!(token.allowance(&user2, &user3), 0);
+    // let logs = e.logger().all();
+    // log!(&e, "logs: {:?}", logs);
 }
 
 #[test]
@@ -236,25 +234,6 @@ fn transfer_from_insufficient_allowance() {
     assert_eq!(token.allowance(&user1, &user3), 100);
 
     token.transfer_from(&user3, &user1, &user2, &101);
-}
-
-#[test]
-#[should_panic(expected = "Decimal must not be greater than 18")]
-fn decimal_is_over_eighteen() {
-    let e = Env::default();
-    let admin = Address::generate(&e);
-    let _ = TokenClient::new(
-        &e,
-        &e.register(
-            Token,
-            (
-                admin,
-                19_u32,
-                String::from_val(&e, &"name"),
-                String::from_val(&e, &"symbol"),
-            ),
-        ),
-    );
 }
 
 #[test]

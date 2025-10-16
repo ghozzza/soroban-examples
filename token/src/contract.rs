@@ -7,6 +7,7 @@ use crate::metadata::{read_decimal, read_name, read_symbol, write_metadata};
 #[cfg(test)]
 use crate::storage_types::{AllowanceDataKey, AllowanceValue, DataKey};
 use crate::storage_types::{INSTANCE_BUMP_AMOUNT, INSTANCE_LIFETIME_THRESHOLD};
+use soroban_sdk::FromVal;
 use soroban_sdk::{
     contract, contractevent, contractimpl, token::TokenInterface, Address, Env, MuxedAddress,
     String,
@@ -34,19 +35,17 @@ pub struct SetAdmin {
 
 #[contractimpl]
 impl Token {
-    pub fn __constructor(e: Env, admin: Address, decimal: u32, name: String, symbol: String) {
-        if decimal > 18 {
-            panic!("Decimal must not be greater than 18");
-        }
+    pub fn __constructor(e: Env, admin: Address) {
         write_administrator(&e, &admin);
         write_metadata(
             &e,
             TokenMetadata {
-                decimal,
-                name,
-                symbol,
+                decimal: 2,
+                name: String::from_val(&e, &"IDRX"),
+                symbol: String::from_val(&e, &"IDRX"),
             },
-        )
+        );
+        Self::set_admin(e, admin);
     }
 
     pub fn mint(e: Env, to: Address, amount: i128) {
