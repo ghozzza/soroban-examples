@@ -1,26 +1,35 @@
 // SPDX-License-Identifier: MIT
 // Compatible with OpenZeppelin Stellar Soroban Contracts ^0.4.1
-// #![no_std]
 
 use soroban_sdk::{Address, contract, contractimpl, Env, String, Symbol};
 use stellar_access::access_control::{self as access_control, AccessControl};
 use stellar_contract_utils::pausable::{self as pausable, Pausable};
 use stellar_contract_utils::upgradeable::UpgradeableInternal;
 use stellar_macros::{default_impl, only_role, Upgradeable, when_not_paused};
-use stellar_tokens::fungible::{Base, burnable::FungibleBurnable, FungibleToken};
+use stellar_tokens::fungible::{
+    Base, blocklist::{BlockList, FungibleBlockList}, burnable::FungibleBurnable, FungibleToken
+};
 
 #[derive(Upgradeable)]
 #[contract]
-pub struct Token;
+pub struct IDRX;
 
 #[contractimpl]
-impl Token {
-    pub fn __constructor(e: &Env, admin: Address, pauser: Address, upgrader: Address, minter: Address) {
-        Base::set_metadata(e, 18, String::from_str(e, "MyStablecoin"), String::from_str(e, "MST"));
+impl IDRX {
+    pub fn __constructor(
+        e: &Env,
+        admin: Address,
+        pauser: Address,
+        upgrader: Address,
+        minter: Address,
+        manager: Address,
+    ) {
+        Base::set_metadata(e, 18, String::from_str(e, "IDRX"), String::from_str(e, "IDRX"));
         access_control::set_admin(e, &admin);
         access_control::grant_role_no_auth(e, &admin, &pauser, &Symbol::new(e, "pauser"));
         access_control::grant_role_no_auth(e, &admin, &upgrader, &Symbol::new(e, "upgrader"));
         access_control::grant_role_no_auth(e, &admin, &minter, &Symbol::new(e, "minter"));
+        access_control::grant_role_no_auth(e, &admin, &manager, &Symbol::new(e, "manager"));
     }
 
     #[only_role(caller, "minter")]
@@ -32,8 +41,8 @@ impl Token {
 
 #[default_impl]
 #[contractimpl]
-impl FungibleToken for Token {
-    type ContractType = Base;
+impl FungibleToken for IDRX {
+    type ContractType = BlockList;
 
     #[when_not_paused]
     fn transfer(e: &Env, from: Address, to: Address, amount: i128) {
@@ -51,7 +60,24 @@ impl FungibleToken for Token {
 //
 
 #[contractimpl]
-impl FungibleBurnable for Token {
+impl FungibleBlockList for IDRX {
+    fn blocked(e: &Env, account: Address) -> bool {
+        BlockList::blocked(e, &account)
+    }
+
+    #[only_role(operator, "manager")]
+    fn block_user(e: &Env, user: Address, operator: Address) {
+        BlockList::block_user(e, &user);
+    }
+
+    #[only_role(operator, "manager")]
+    fn unblock_user(e: &Env, user: Address, operator: Address) {
+        BlockList::unblock_user(e, &user);
+    }
+}
+
+#[contractimpl]
+impl FungibleBurnable for IDRX {
     #[when_not_paused]
     fn burn(e: &Env, from: Address, amount: i128) {
         Base::burn(e, &from, amount);
@@ -67,7 +93,7 @@ impl FungibleBurnable for Token {
 // Utils
 //
 
-impl UpgradeableInternal for Token {
+impl UpgradeableInternal for IDRX {
     fn _require_auth(e: &Env, operator: &Address) {
         access_control::ensure_role(e, operator, &Symbol::new(e, "upgrader"));
         operator.require_auth();
@@ -75,7 +101,7 @@ impl UpgradeableInternal for Token {
 }
 
 #[contractimpl]
-impl Pausable for Token {
+impl Pausable for IDRX {
     fn paused(e: &Env) -> bool {
         pausable::paused(e)
     }
@@ -93,4 +119,4 @@ impl Pausable for Token {
 
 #[default_impl]
 #[contractimpl]
-impl AccessControl for Token {}
+impl AccessControl for IDRX {}
