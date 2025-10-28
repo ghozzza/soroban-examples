@@ -1,200 +1,96 @@
-//! This contract demonstrates a sample implementation of the Soroban token
-//! interface.
-use crate::admin::{read_administrator, write_administrator};
-use crate::allowance::{read_allowance, spend_allowance, write_allowance};
-use crate::balance::{read_balance, receive_balance, spend_balance};
-use crate::metadata::{read_decimal, read_name, read_symbol, write_metadata};
-#[cfg(test)]
-use crate::storage_types::{AllowanceDataKey, AllowanceValue, DataKey};
-use crate::storage_types::{INSTANCE_BUMP_AMOUNT, INSTANCE_LIFETIME_THRESHOLD};
-use soroban_sdk::FromVal;
-use soroban_sdk::{
-    contract, contractevent, contractimpl, token::TokenInterface, Address, Env, MuxedAddress,
-    String,
-};
-use soroban_token_sdk::events;
-use soroban_token_sdk::metadata::TokenMetadata;
+// SPDX-License-Identifier: MIT
+// Compatible with OpenZeppelin Stellar Soroban Contracts ^0.4.1
+// #![no_std]
 
-fn check_nonnegative_amount(amount: i128) {
-    if amount < 0 {
-        panic!("negative amount is not allowed: {}", amount)
-    }
-}
+use soroban_sdk::{Address, contract, contractimpl, Env, String, Symbol};
+use stellar_access::access_control::{self as access_control, AccessControl};
+use stellar_contract_utils::pausable::{self as pausable, Pausable};
+use stellar_contract_utils::upgradeable::UpgradeableInternal;
+use stellar_macros::{default_impl, only_role, Upgradeable, when_not_paused};
+use stellar_tokens::fungible::{Base, burnable::FungibleBurnable, FungibleToken};
 
+#[derive(Upgradeable)]
 #[contract]
 pub struct Token;
 
-// SetAdmin is not a standardized token event, so we just define a custom event
-// for our token.
-#[contractevent(data_format = "single-value")]
-pub struct SetAdmin {
-    #[topic]
-    admin: Address,
-    new_admin: Address,
-}
-
 #[contractimpl]
 impl Token {
-    pub fn __constructor(e: Env, admin: Address) {
-        write_administrator(&e, &admin);
-        write_metadata(
-            &e,
-            TokenMetadata {
-                decimal: 2,
-                name: String::from_val(&e, &"IDRX"),
-                symbol: String::from_val(&e, &"IDRX"),
-            },
-        );
-        Self::set_admin(e, admin);
+    pub fn __constructor(e: &Env, admin: Address, pauser: Address, upgrader: Address, minter: Address) {
+        Base::set_metadata(e, 18, String::from_str(e, "MyStablecoin"), String::from_str(e, "MST"));
+        access_control::set_admin(e, &admin);
+        access_control::grant_role_no_auth(e, &admin, &pauser, &Symbol::new(e, "pauser"));
+        access_control::grant_role_no_auth(e, &admin, &upgrader, &Symbol::new(e, "upgrader"));
+        access_control::grant_role_no_auth(e, &admin, &minter, &Symbol::new(e, "minter"));
     }
 
-    pub fn mint(e: Env, to: Address, amount: i128) {
-        check_nonnegative_amount(amount);
-        let admin = read_administrator(&e);
-        admin.require_auth();
+    #[only_role(caller, "minter")]
+    #[when_not_paused]
+    pub fn mint(e: &Env, account: Address, amount: i128, caller: Address) {
+        Base::mint(e, &account, amount);
+    }
+}
 
-        e.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+#[default_impl]
+#[contractimpl]
+impl FungibleToken for Token {
+    type ContractType = Base;
 
-        receive_balance(&e, to.clone(), amount);
-        events::MintWithAmountOnly { to, amount }.publish(&e);
+    #[when_not_paused]
+    fn transfer(e: &Env, from: Address, to: Address, amount: i128) {
+        Self::ContractType::transfer(e, &from, &to, amount);
     }
 
-    pub fn set_admin(e: Env, new_admin: Address) {
-        let admin = read_administrator(&e);
-        admin.require_auth();
+    #[when_not_paused]
+    fn transfer_from(e: &Env, spender: Address, from: Address, to: Address, amount: i128) {
+        Self::ContractType::transfer_from(e, &spender, &from, &to, amount);
+    }
+}
 
-        e.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+//
+// Extensions
+//
 
-        write_administrator(&e, &new_admin);
-        SetAdmin { admin, new_admin }.publish(&e);
+#[contractimpl]
+impl FungibleBurnable for Token {
+    #[when_not_paused]
+    fn burn(e: &Env, from: Address, amount: i128) {
+        Base::burn(e, &from, amount);
     }
 
-    #[cfg(test)]
-    pub fn get_allowance(e: Env, from: Address, spender: Address) -> Option<AllowanceValue> {
-        let key = DataKey::Allowance(AllowanceDataKey { from, spender });
-        let allowance = e.storage().temporary().get::<_, AllowanceValue>(&key);
-        allowance
+    #[when_not_paused]
+    fn burn_from(e: &Env, spender: Address, from: Address, amount: i128) {
+        Base::burn_from(e, &spender, &from, amount);
+    }
+}
+
+//
+// Utils
+//
+
+impl UpgradeableInternal for Token {
+    fn _require_auth(e: &Env, operator: &Address) {
+        access_control::ensure_role(e, operator, &Symbol::new(e, "upgrader"));
+        operator.require_auth();
     }
 }
 
 #[contractimpl]
-impl TokenInterface for Token {
-    fn allowance(e: Env, from: Address, spender: Address) -> i128 {
-        e.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-        read_allowance(&e, from, spender).amount
+impl Pausable for Token {
+    fn paused(e: &Env) -> bool {
+        pausable::paused(e)
     }
 
-    fn approve(e: Env, from: Address, spender: Address, amount: i128, expiration_ledger: u32) {
-        from.require_auth();
-
-        check_nonnegative_amount(amount);
-
-        e.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-
-        write_allowance(&e, from.clone(), spender.clone(), amount, expiration_ledger);
-        events::Approve {
-            from,
-            spender,
-            amount,
-            expiration_ledger,
-        }
-        .publish(&e);
+    #[only_role(caller, "pauser")]
+    fn pause(e: &Env, caller: Address) {
+        pausable::pause(e);
     }
 
-    fn balance(e: Env, id: Address) -> i128 {
-        e.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-        read_balance(&e, id)
-    }
-
-    fn transfer(e: Env, from: Address, to_muxed: MuxedAddress, amount: i128) {
-        from.require_auth();
-
-        check_nonnegative_amount(amount);
-
-        e.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-
-        spend_balance(&e, from.clone(), amount);
-        let to: Address = to_muxed.address();
-        receive_balance(&e, to.clone(), amount);
-        events::Transfer {
-            from,
-            to,
-            to_muxed_id: to_muxed.id(),
-            amount,
-        }
-        .publish(&e);
-    }
-
-    fn transfer_from(e: Env, spender: Address, from: Address, to: Address, amount: i128) {
-        spender.require_auth();
-
-        check_nonnegative_amount(amount);
-
-        e.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-
-        spend_allowance(&e, from.clone(), spender, amount);
-        spend_balance(&e, from.clone(), amount);
-        receive_balance(&e, to.clone(), amount);
-        events::Transfer {
-            from,
-            to,
-            // `transfer_from` does not support muxed destination.
-            to_muxed_id: None,
-            amount,
-        }
-        .publish(&e);
-    }
-
-    fn burn(e: Env, from: Address, amount: i128) {
-        from.require_auth();
-
-        check_nonnegative_amount(amount);
-
-        e.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-
-        spend_balance(&e, from.clone(), amount);
-        events::Burn { from, amount }.publish(&e);
-    }
-
-    fn burn_from(e: Env, spender: Address, from: Address, amount: i128) {
-        spender.require_auth();
-
-        check_nonnegative_amount(amount);
-
-        e.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-
-        spend_allowance(&e, from.clone(), spender, amount);
-        spend_balance(&e, from.clone(), amount);
-        events::Burn { from, amount }.publish(&e);
-    }
-
-    fn decimals(e: Env) -> u32 {
-        read_decimal(&e)
-    }
-
-    fn name(e: Env) -> String {
-        read_name(&e)
-    }
-
-    fn symbol(e: Env) -> String {
-        read_symbol(&e)
+    #[only_role(caller, "pauser")]
+    fn unpause(e: &Env, caller: Address) {
+        pausable::unpause(e);
     }
 }
+
+#[default_impl]
+#[contractimpl]
+impl AccessControl for Token {}
