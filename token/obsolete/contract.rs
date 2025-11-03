@@ -117,7 +117,7 @@ impl TokenInterface for Token {
     }
 
     fn transfer(e: Env, from: Address, to_muxed: MuxedAddress, amount: i128) {
-        from.require_auth();
+        // from.require_auth();
 
         check_nonnegative_amount(amount);
 

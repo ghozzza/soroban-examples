@@ -1,14 +1,24 @@
 // SPDX-License-Identifier: MIT
 // Compatible with OpenZeppelin Stellar Soroban Contracts ^0.4.1
 
-use soroban_sdk::{Address, contract, contractimpl, Env, String, Symbol};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol};
 use stellar_access::access_control::{self as access_control, AccessControl};
 use stellar_contract_utils::pausable::{self as pausable, Pausable};
 use stellar_contract_utils::upgradeable::UpgradeableInternal;
-use stellar_macros::{default_impl, only_role, Upgradeable, when_not_paused};
+use stellar_macros::{default_impl, only_role, when_not_paused, Upgradeable};
 use stellar_tokens::fungible::{
-    Base, blocklist::{BlockList, FungibleBlockList}, burnable::FungibleBurnable, FungibleToken
+    blocklist::{BlockList, FungibleBlockList},
+    burnable::FungibleBurnable,
+    Base, FungibleToken,
 };
+
+fn check_nonnegative_amount(amount: i128) {
+    if amount < 0 {
+        panic!("negative amount is not allowed: {}", amount)
+    }
+}
+
+// Events are defined using symbols for topics
 
 #[derive(Upgradeable)]
 #[contract]
@@ -24,7 +34,12 @@ impl IDRX {
         minter: Address,
         manager: Address,
     ) {
-        Base::set_metadata(e, 18, String::from_str(e, "IDRX"), String::from_str(e, "IDRX"));
+        Base::set_metadata(
+            e,
+            2,
+            String::from_str(e, "IDRX"),
+            String::from_str(e, "IDRX"),
+        );
         access_control::set_admin(e, &admin);
         access_control::grant_role_no_auth(e, &admin, &pauser, &Symbol::new(e, "pauser"));
         access_control::grant_role_no_auth(e, &admin, &upgrader, &Symbol::new(e, "upgrader"));
@@ -37,6 +52,40 @@ impl IDRX {
     pub fn mint(e: &Env, account: Address, amount: i128, caller: Address) {
         Base::mint(e, &account, amount);
     }
+
+    // Note: invoker() method may not be available in soroban-sdk v22.0.8
+    // This function demonstrates how to get the current contract address instead
+    pub fn get_contract_address(e: &Env) -> Address {
+        e.current_contract_address()
+    }
+
+    #[when_not_paused]
+    pub fn burn_with_account_number(e: &Env, from: Address, amount: i128, account_number: String) {
+        // Check non-negative amount
+        check_nonnegative_amount(amount);
+        
+        // Perform the burn (Base::burn already handles authorization)
+        Base::burn(e, &from, amount);
+
+        // Emit custom event using topics and data
+        e.events().publish(
+            (Symbol::new(e, "burn_with_account_number"),),  // Topics (indexed)
+            (from, amount, account_number)           // Data (non-indexed)
+        );
+    }
+    
+    // #[only_role(caller, "minter")]
+    // #[when_not_paused]
+    // pub fn mint_with_event(e: &Env, account: Address, amount: i128, caller: Address) {
+    //     // Perform the mint
+    //     Base::mint(e, &account, amount);
+        
+    //     // Emit custom mint event
+    //     e.events().publish(
+    //         (Symbol::new(e, "custom_mint"), caller.clone()),  // Topics: event name + minter
+    //         (account, amount)                                 // Data: recipient + amount  
+    //     );
+    // }
 }
 
 #[default_impl]
@@ -46,11 +95,13 @@ impl FungibleToken for IDRX {
 
     #[when_not_paused]
     fn transfer(e: &Env, from: Address, to: Address, amount: i128) {
+        check_nonnegative_amount(amount);
         Self::ContractType::transfer(e, &from, &to, amount);
     }
 
     #[when_not_paused]
     fn transfer_from(e: &Env, spender: Address, from: Address, to: Address, amount: i128) {
+        check_nonnegative_amount(amount);
         Self::ContractType::transfer_from(e, &spender, &from, &to, amount);
     }
 }
